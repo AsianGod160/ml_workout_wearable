@@ -5,7 +5,7 @@ BLEService fitnessService("181C");
 // Characteristics
 BLECharacteristic heartRateChar("2AB4", BLERead | BLENotify, 50);    // Heart rate
 BLECharacteristic workoutChar("2AC8", BLERead | BLENotify, 50);      // Workout + reps
-BLECharacteristic commandChar("2A3A", BLEWriteWithoutResponse, 50);  // Command
+BLECharacteristic commandChar("2A3A", BLEWrite, 50);  // Command
 
 bool workoutEnded = false;
 unsigned long lastHeartRateUpdate = 0;
