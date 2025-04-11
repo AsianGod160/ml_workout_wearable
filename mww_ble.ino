@@ -52,12 +52,17 @@ void sendHeartRate() {
 }
 
 void onCommandReceived(BLEDevice central, BLECharacteristic characteristic) {
-  const uint8_t* cmd = characteristic.value();
-  char *cmd_str = reinterpret_cast<char*>(const_cast<uint8_t*>(cmd));
-  Serial.println(strcat("Command received: ", cmd_str));
+  char cmd_buf[256];
+  const char* cmd = reinterpret_cast<const char*>(characteristic.value()); //not null terminated for some reason
+  size_t copy_len = min(characteristic.valueLength(), sizeof(cmd_buf) - 1); //length will usually be val len
+  memcpy(cmd_buf, cmd, copy_len);
+  cmd_buf[copy_len] = '\0';
   
-  char *json_cmp_to = strdup("{\"command\": \"stop\"}");
-  if (!strcmp(cmd_str, json_cmp_to)) {
+  const char *json_cmp_to = "{\\\"command\\\": \\\"stop\\\"}";
+  size_t json_len = strlen(json_cmp_to);
+  
+  if (copy_len == json_len && !memcmp(cmd_buf, json_cmp_to, copy_len)) {
+    Serial.println(cmd_buf);
     workoutEnded = true;
     sendWorkoutSummary();
   }
