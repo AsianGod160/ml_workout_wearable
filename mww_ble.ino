@@ -57,12 +57,14 @@ void onCommandReceived(BLEDevice central, BLECharacteristic characteristic) {
   size_t copy_len = min(characteristic.valueLength(), sizeof(cmd_buf) - 1); //length will usually be val len
   memcpy(cmd_buf, cmd, copy_len);
   cmd_buf[copy_len] = '\0';
-  
-  const char *json_cmp_to = "{\\\"command\\\": \\\"stop\\\"}";
+
+  Serial.print("Commande Received: ");
+  Serial.println(cmd_buf);
+  const char *json_cmp_to = "{\"command\":\"stop\"}";
+//  Commande Received: {"command":"stop"}
+//  const char *json_cmp_to = "{\\\"command\\\": \\\"stop\\\"}";
   size_t json_len = strlen(json_cmp_to);
-  
   if (copy_len == json_len && !memcmp(cmd_buf, json_cmp_to, copy_len)) {
-    Serial.println(cmd_buf);
     workoutEnded = true;
     sendWorkoutSummary();
   }
