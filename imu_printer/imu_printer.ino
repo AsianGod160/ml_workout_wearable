@@ -44,10 +44,10 @@ MAX30105 heart_rate_sensor;
 #define HEART_RATE_HZ 30 //30 heart rate samples per second
 #define RC_TENSOR_SIZE 128  // Number of samples to buffer
 #define CL_BUFFER_SIZE 96 //flattened buffer size for interpreter input
-#define CL_COLUMN_SIZE 32
+#define CL_BURST_LEN 20
+#define CL_COLUMN_SIZE (32 * CL_BURST_LEN)
 #define CL_ROW_SIZE 3
 
-#define CL_BURST_LEN 20
 #define RC_BURST_LEN 5
 #define DATA_LEN 640
 
@@ -95,7 +95,7 @@ volatile uint8_t RC_read_index = 0;
 volatile uint8_t CL_write_index = 0;
 volatile uint8_t CL_read_index = 0;
 volatile uint8_t RC_buf_count = 0;
-volatile uint8_t CL_buf_count = 0;
+volatile uint16_t CL_buf_count = 0;
 
 //Model Preprocessing: Running sums (Used for Averages)==========================
 volatile float rc_running_sum_x = 0;
@@ -259,7 +259,7 @@ void loop() {
 
       //if convolution is saturated
       if (rc_count >= 10){ //accel buff full
-        rc_count--;
+        rc_count--; //keep it hovering
         float accel_smoothed[] = {0, 0, 0};
 
         //find average / perform convolution
@@ -407,7 +407,7 @@ void loop() {
       }
     }
   }
-
+  // Serial.println(CL_buf_count);
   //Inference======================================================
   #ifdef USE_MODEL
   //Rep Count invocation============================================
@@ -445,44 +445,48 @@ void loop() {
     float scale = cl_input->params.scale;
     int zero_point = cl_input->params.zero_point;
 
-    for (int i = 0; i < CL_ROW_SIZE; ++i) { //x, y, or z
-      for (int j = 0; j < CL_COLUMN_SIZE; ++j) {
-        uint8_t idx = i * CL_COLUMN_SIZE + j;
-        float val = (cl_model_data[i][j] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i]); //subtract inputs by average
-        // Serial.print("CL: ")
-        // Serial.println((cl_model_data[i][j] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i])); //subtract inputs by average
-        int quantized = (int)(val / scale + zero_point);
+    //experimental:===============================
+    for (int k = 0; k < CL_BURST_LEN; k++){
+      for (int i = 0; i < CL_ROW_SIZE; ++i) { //x, y, or z
+        for (int j = 0; j < CL_COLUMN_SIZE/CL_BURST_LEN; ++j) {
+          uint8_t idx = i * CL_COLUMN_SIZE + j;
+          float val = (cl_model_data[i][j + k*(CL_COLUMN_SIZE/CL_BURST_LEN)] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i]); //subtract inputs by average
+          // Serial.print("CL: ")
+          // Serial.println((cl_model_data[i][j] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i])); //subtract inputs by average
+          int quantized = (int)(val / scale + zero_point);
 
-        //clamp
-        quantized = constrain(quantized, 0, 255);
+          //clamp
+          quantized = constrain(quantized, 0, 255);
 
-        cl_input->data.uint8[idx] = quantized;
+          cl_input->data.uint8[idx] = quantized;
+        }
+        *cl_running_sum[i] = 0; //reset running sum for this axis
+        *cl_rolling_max[i] = 0; //reset rolling max
       }
-      *cl_running_sum[i] = 0; //reset running sum for this axis
-      *cl_rolling_max[i] = 0; //reset rolling max
-    }
-    status = classification_interpreter->Invoke();
-    if (status != kTfLiteOk) {
-      Serial.println("Classification Invoke Failed!");
-    }
-    float cl_result[3];
-    Serial.print("Classification Model Output: ");
+      status = classification_interpreter->Invoke();
+      if (status != kTfLiteOk) {
+        Serial.println("Classification Invoke Failed!");
+      }
+      float cl_result[3];
+      Serial.print("Classification Model Output: ");
 
-    //retrieve model output size:
-    int num_elements = 1;
-    for (int i = 0; i < cl_output->dims->size; ++i) {
-      num_elements *= cl_output->dims->data[i];
-    }
+      //retrieve model output size:
+      int num_elements = 1;
+      for (int i = 0; i < cl_output->dims->size; ++i) {
+        num_elements *= cl_output->dims->data[i];
+      }
 
-    float out_scale = cl_output->params.scale;
-    int out_zero_point = cl_output->params.zero_point;
-    // Read output
-    for (int i = 0; i < num_elements; i++) {
-      cl_result[i] = (cl_output->data.uint8[i] - out_zero_point) * out_scale;
-      Serial.print(cl_result[i]);
-      Serial.print("  ");
+      float out_scale = cl_output->params.scale;
+      int out_zero_point = cl_output->params.zero_point;
+      // Read output
+      for (int i = 0; i < num_elements; i++) {
+        cl_result[i] = (cl_output->data.uint8[i] - out_zero_point) * out_scale;
+        Serial.print(cl_result[i]);
+        Serial.print("  ");
+      }
+      Serial.println();
     }
-    Serial.println();
+    //experimental:===============================
   }
   #endif
 }
