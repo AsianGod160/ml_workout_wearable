@@ -11,7 +11,6 @@
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/schema/schema_generated.h"
 
-
 const tflite::Model* rep_count_model;
 tflite::MicroInterpreter* rep_counter_interpreter;
 TfLiteTensor* rc_input;
@@ -260,16 +259,16 @@ void loop() {
       //if convolution is saturated
       if (rc_count >= 10){ //accel buff full
         rc_count--; //keep it hovering
-        float accel_smoothed[] = {0, 0, 0};
+        float accel_smoothed[] = {0, 0, 0}; //used to store x, y, and z smoothed
 
         //find average / perform convolution
         for (int i = 0; i < CONVOLUTION_SIZE; i++){
           for (int j = 0; j < 3; j++){
-            accel_smoothed[j] += accel_bufs[j][i];
+            accel_smoothed[j] += accel_bufs[j][i]; //row based sum
           }
         }
         for(int axis = 0; axis < 3; axis++){
-          accel_smoothed[axis] /= CONVOLUTION_SIZE;
+          accel_smoothed[axis] /= CONVOLUTION_SIZE; //div final sum by 10
         }
 
 
@@ -291,22 +290,21 @@ void loop() {
         RC_write_index = (RC_write_index + 1) % RC_TENSOR_SIZE;
         RC_buf_count++;
 
-        //rc running sum, used in average
+        //rc running sum, used in final average preprocessing
         rc_running_sum_x += ax_smoothed;
         rc_running_sum_y += ay_smoothed;
         rc_running_sum_z += az_smoothed;
 
         //used for cl
-        cl_model_data[0][CL_write_index] = ax_smoothed; //x accel store in classification buffer
-        cl_model_data[1][CL_write_index] = ay_smoothed; //y accel store in classification buffer
-        cl_model_data[2][CL_write_index] = az_smoothed; //z accel store in classification buffer
+        cl_model_data[X][CL_write_index] = ax_smoothed; //x accel store in classification buffer
+        cl_model_data[Y][CL_write_index] = ay_smoothed; //y accel store in classification buffer
+        cl_model_data[Z][CL_write_index] = az_smoothed; //z accel store in classification buffer
 
         for(int i = 0; i < 3; i++){ //Compute the maximum as values are added. Used to normalize later on
           if (abs(accel_smoothed[i]) > *cl_rolling_max[i]){
             *cl_rolling_max[i] = abs(accel_smoothed[i]);
           }
         }
-        //Handle buffer overrun, not always necessary
         CL_write_index = (CL_write_index + 1) % CL_COLUMN_SIZE;
         CL_buf_count++;
 
@@ -439,17 +437,30 @@ void loop() {
   }
   //Classification Model Invocation=================================
   if (cl_modelReady){
+    //reset states for next use
     CL_buf_count = 0;
+    CL_write_index = 0; 
     cl_modelReady = false;
+
+    //input stuff
     TfLiteStatus status;
     float scale = cl_input->params.scale;
     int zero_point = cl_input->params.zero_point;
+
+    //retrieve model output size
+    int num_elements = 1;
+    for (int i = 0; i < cl_output->dims->size; ++i) {
+      num_elements *= cl_output->dims->data[i];
+    }
+
+    float out_scale = cl_output->params.scale;
+    int out_zero_point = cl_output->params.zero_point;
 
     //experimental:===============================
     for (int k = 0; k < CL_BURST_LEN; k++){
       for (int i = 0; i < CL_ROW_SIZE; ++i) { //x, y, or z
         for (int j = 0; j < CL_COLUMN_SIZE/CL_BURST_LEN; ++j) {
-          uint8_t idx = i * CL_COLUMN_SIZE + j;
+          uint8_t idx = i * (CL_COLUMN_SIZE/CL_BURST_LEN) + j;
           float val = (cl_model_data[i][j + k*(CL_COLUMN_SIZE/CL_BURST_LEN)] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i]); //subtract inputs by average
           // Serial.print("CL: ")
           // Serial.println((cl_model_data[i][j] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i])); //subtract inputs by average
@@ -460,8 +471,6 @@ void loop() {
 
           cl_input->data.uint8[idx] = quantized;
         }
-        *cl_running_sum[i] = 0; //reset running sum for this axis
-        *cl_rolling_max[i] = 0; //reset rolling max
       }
       status = classification_interpreter->Invoke();
       if (status != kTfLiteOk) {
@@ -470,14 +479,6 @@ void loop() {
       float cl_result[3];
       Serial.print("Classification Model Output: ");
 
-      //retrieve model output size:
-      int num_elements = 1;
-      for (int i = 0; i < cl_output->dims->size; ++i) {
-        num_elements *= cl_output->dims->data[i];
-      }
-
-      float out_scale = cl_output->params.scale;
-      int out_zero_point = cl_output->params.zero_point;
       // Read output
       for (int i = 0; i < num_elements; i++) {
         cl_result[i] = (cl_output->data.uint8[i] - out_zero_point) * out_scale;
@@ -485,6 +486,10 @@ void loop() {
         Serial.print("  ");
       }
       Serial.println();
+    }
+    for (int i = 0; i < CL_ROW_SIZE; i++){
+      *cl_running_sum[i] = 0; //reset running sum for this axis
+      *cl_rolling_max[i] = 0; //reset rolling max
     }
     //experimental:===============================
   }
