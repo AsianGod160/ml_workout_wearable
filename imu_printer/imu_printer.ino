@@ -21,8 +21,11 @@ tflite::MicroInterpreter *classification_interpreter;
 TfLiteTensor *cl_input;
 TfLiteTensor *cl_output;
 
-constexpr int kTensorArenaSize_rc = 10 * 1024;
+constexpr int kTensorArenaSize_rc = 7 * 1024; //7 kb
 uint8_t tensor_arena_rc[kTensorArenaSize_rc];
+
+constexpr int kTensorArenaSize_cl = 56 * 1024; //56 KB
+uint8_t tensor_arena_cl[kTensorArenaSize_rc];
 
 using namespace mbed;
 
@@ -39,16 +42,17 @@ Ticker bluetoothTicker;
 
 MAX30105 heart_rate_sensor;
 
-#define SAMPLE_RATE_HZ 10 //10 IMU Samples Per Second
-#define HEART_RATE_HZ 30 //30 heart rate samples per second
+#define SAMPLE_RATE_HZ 30 //10 IMU Samples Per Second
+#define MODEL_HZ 2 // check model validity twice a second
+#define HEART_RATE_HZ 100 //30 heart rate samples per second
 #define RC_TENSOR_SIZE 128  // Number of samples to buffer
 #define CL_BUFFER_SIZE 96 //flattened buffer size for interpreter input
-#define CL_BURST_LEN 20
+#define CL_BURST_LEN 15
 #define CL_COLUMN_SIZE (32 * CL_BURST_LEN)
 #define CL_ROW_SIZE 3
 
 #define RC_BURST_LEN 5
-#define DATA_LEN 640
+// #define DATA_LEN 640
 
 #define RATE_SIZE 4 //heart rate buffer size, 4 is good
 #define CONVOLUTION_SIZE 10
@@ -58,7 +62,7 @@ MAX30105 heart_rate_sensor;
 #define Y 1
 #define Z 2
 #define USE_MODEL
-// #define USE_BLE
+#define USE_BLE
 
 byte rates[RATE_SIZE]; //Array of heart rates
 byte rateSpot = 0;
@@ -67,11 +71,16 @@ long lastBeat = 0; //Time at which the last beat occurred
 float beatsPerMinute;
 int beatAvg;
 
+float reps = 0;
+
 struct IMUData {
   float ax, ay, az;
   float gx, gy, gz;
   uint32_t dt;
 };
+
+volatile String workouts[CL_BURST_LEN];
+char workout[20] = "Undefined";
 
 //State Vars
 #ifdef USE_MODEL
@@ -97,29 +106,29 @@ volatile uint8_t RC_buf_count = 0;
 volatile uint16_t CL_buf_count = 0;
 
 //Model Preprocessing: Running sums (Used for Averages)==========================
-volatile float rc_running_sum_x = 0;
-volatile float rc_running_sum_y = 0;
-volatile float rc_running_sum_z = 0;
-volatile float *rc_running_sum[] = {&rc_running_sum_x, &rc_running_sum_y, &rc_running_sum_z};
+// volatile float rc_running_sum_x = 0;
+// volatile float rc_running_sum_y = 0;
+// volatile float rc_running_sum_z = 0;
+// volatile float *rc_running_sum[] = {&rc_running_sum_x, &rc_running_sum_y, &rc_running_sum_z};
 
-volatile float cl_running_sum_x = 0;
-volatile float cl_running_sum_y = 0;
-volatile float cl_running_sum_z = 0;
-volatile float *cl_running_sum[] = {&cl_running_sum_x, &cl_running_sum_y, &cl_running_sum_z};
+// volatile float cl_running_sum_x = 0;
+// volatile float cl_running_sum_y = 0;
+// volatile float cl_running_sum_z = 0;
+// volatile float *cl_running_sum[] = {&cl_running_sum_x, &cl_running_sum_y, &cl_running_sum_z};
 
 //Model Preprocessing: Rolling Max (Used for Normalizations)======================
-volatile float rc_rolling_max_x = 0;
-volatile float rc_rolling_max_y = 0;
-volatile float rc_rolling_max_z = 0;
-volatile float *rc_rolling_max[] = {&rc_rolling_max_x, &rc_rolling_max_y, &rc_rolling_max_z};
+// volatile float rc_rolling_max_x = 0;
+// volatile float rc_rolling_max_y = 0;
+// volatile float rc_rolling_max_z = 0;
+// volatile float *rc_rolling_max[] = {&rc_rolling_max_x, &rc_rolling_max_y, &rc_rolling_max_z};
 
-volatile float cl_rolling_max_x = 0;
-volatile float cl_rolling_max_y = 0;
-volatile float cl_rolling_max_z = 0;
-volatile float *cl_rolling_max[] = {&cl_rolling_max_x, &cl_rolling_max_y, &cl_rolling_max_z};
+// volatile float cl_rolling_max_x = 0;
+// volatile float cl_rolling_max_y = 0;
+// volatile float cl_rolling_max_z = 0;
+// volatile float *cl_rolling_max[] = {&cl_rolling_max_x, &cl_rolling_max_y, &cl_rolling_max_z};
 
-volatile uint32_t rc_count = 0;
-volatile uint8_t cl_count = 0;
+// volatile uint32_t convo_full = 0;
+// volatile uint8_t cl_count = 0;
 
 #else
 volatile IMUData buffer[RC_TENSOR_SIZE]; //data buf for imu
@@ -138,30 +147,30 @@ volatile bool cl_modelReady = false;
 volatile bool deviceConnected = false;
 
 void setup() {
-  Serial.begin(9600);
-  while (!Serial);
+  // Serial.begin(9600);
+  // while (!Serial);
 
   //Dynamically define model, save .bss space
-  constexpr int kTensorArenaSize_cl = 64 * 1024; //64 KB
-  uint8_t *tensor_arena_cl = (uint8_t*) malloc(kTensorArenaSize_cl);
+  // constexpr int kTensorArenaSize_cl = 56 * 1024; //56 KB
+  // uint8_t *tensor_arena_cl = (uint8_t*) malloc(kTensorArenaSize_cl);
   if(!tensor_arena_cl){
-    Serial.println("Arena Alloc Failed");
+    ////Serial.println("Arena Alloc Failed");
   }
 
   //BLE init
   while (!BLE.begin()) {
-    Serial.println("BLE failed to initialize");
+    ////Serial.println("BLE failed to initialize");
     while (1);
   }
 
   //imu init
   while (!IMU.begin()) {
-    Serial.println("Failed to initialize IMU!");
+    ////Serial.println("Failed to initialize IMU!");
     while (1);
   }
 
   while (!heart_rate_sensor.begin(Wire, I2C_SPEED_FAST)) {
-    Serial.println("Failed to initialize Heart Rate Sensor!");
+    ////Serial.println("Failed to initialize Heart Rate Sensor!");
     while (1);
   }
 
@@ -188,11 +197,11 @@ void setup() {
   rep_count_model = tflite::GetModel(rep_count_model_ptr);
   classification_model = tflite::GetModel(classification_model_ptr);
   if (rep_count_model->version() != TFLITE_SCHEMA_VERSION) {
-    Serial.println("Rep Count Model Schema Mismatch!");
+    ////Serial.println("Rep Count Model Schema Mismatch!");
     while (1);
   }
   if (classification_model->version() != TFLITE_SCHEMA_VERSION) {
-    Serial.println("Classification Model Mismatch!");
+    ////Serial.println("Classification Model Mismatch!");
     while(1);
   }
 
@@ -207,17 +216,17 @@ void setup() {
   rc_input = rep_counter_interpreter->input(0);
   rc_output = rep_counter_interpreter->output(0);
   if (status != kTfLiteOk) {
-    Serial.println("❌ Rep Counter model failed to allocate tensors!");
+    ////Serial.println("❌ Rep Counter model failed to allocate tensors!");
   }
 
   status = classification_interpreter->AllocateTensors();
   cl_input = classification_interpreter->input(0);
   cl_output = classification_interpreter->output(0);
   if (status != kTfLiteOk) {
-    Serial.println("❌ Classification model failed to allocate tensors!");
+    ////Serial.println("❌ Classification model failed to allocate tensors!");
   }
 
-  Serial.println("Models ready.");
+  ////Serial.println("Models ready.");
   //===============================================================
 
   //Change these to allow more frequent switching, timers for IMU and Heart Rate
@@ -227,7 +236,7 @@ void setup() {
   #else 
   imuTicker.attach(HZ_10_callback, (float) 1/SAMPLE_RATE_HZ ); //100 ms = 10 times a second, immediately starts timer
   #endif
-  bluetoothTicker.attach(HZ_1_callback, 1);
+  bluetoothTicker.attach(HZ_1_callback, (float) 1/MODEL_HZ);
   heartRateTicker.attach(HZ_30_callback, (float) 1/HEART_RATE_HZ ); //250 ms = 4 times a second, immediately starts timer
 }
 
@@ -244,79 +253,95 @@ void loop() {
     //copy data into rep count and classifier model buffers respectively (accel x, y, and z)
     if (IMU.accelerationAvailable()) {
       IMU.readAcceleration(ax, ay, az);
-      // Serial.print("Ra: ");
-      // Serial.print(ax);
-      // Serial.print(ay);
-      // Serial.print(az);
+      // //Serial.print("Ra: ");
+      // //Serial.print(ax);
+      // //Serial.print(ay);
+      // //Serial.print(az);
       noInterrupts();
 
+      //used for cl, no convolution needed
+      cl_model_data[X][CL_write_index] = ax; //x accel store in classification buffer
+      cl_model_data[Y][CL_write_index] = ay; //y accel store in classification buffer
+      cl_model_data[Z][CL_write_index] = az; //z accel store in classification buffer
+
+      // for(int i = 0; i < 3; i++){ //Compute the maximum as values are added. Used to normalize later on
+      //   if (abs(cl_model_data[i][CL_write_index]) > *cl_rolling_max[i]){
+      //     *cl_rolling_max[i] = abs(cl_model_data[i][CL_write_index]);
+      //   }
+      // }
+      CL_write_index = (CL_write_index + 1) % CL_COLUMN_SIZE;
+      CL_buf_count++;
+
+      // cl_running_sum_x += ax;
+      // cl_running_sum_y += ay;
+      // cl_running_sum_z += az;
+
       //preprocessing, saturate convolution buffers to average later
-      accel_bufs[0][accel_write_index] = ax;
-      accel_bufs[1][accel_write_index] = ay;
-      accel_bufs[2][accel_write_index] = az;
-      rc_count++;
+      // accel_bufs[0][accel_write_index] = ax;
+      // accel_bufs[1][accel_write_index] = ay;
+      // accel_bufs[2][accel_write_index] = az;
 
-      //if convolution is saturated
-      if (rc_count >= 10){ //accel buff full
-        rc_count--; //keep it hovering
-        float accel_smoothed[] = {0, 0, 0}; //used to store x, y, and z smoothed
+      a_x[RC_write_index] = ax;
+      a_y[RC_write_index] = ay;
+      a_z[RC_write_index] = az;
 
-        //find average / perform convolution
-        for (int i = 0; i < CONVOLUTION_SIZE; i++){
-          for (int j = 0; j < 3; j++){
-            accel_smoothed[j] += accel_bufs[j][i]; //row based sum
-          }
-        }
-        for(int axis = 0; axis < 3; axis++){
-          accel_smoothed[axis] /= CONVOLUTION_SIZE; //div final sum by 10
-        }
-
-
-        float ax_smoothed = accel_smoothed[X];
-        float ay_smoothed = accel_smoothed[Y];
-        float az_smoothed = accel_smoothed[Z];
-        //used for rc
-        a_x[RC_write_index] = ax_smoothed;
-        a_y[RC_write_index] = ay_smoothed;
-        a_z[RC_write_index] = az_smoothed;
-        
-        for(int i = 0; i < 3; i++){ //Compute the maximum as values are added. Used to normalize later on
-          if (abs(accel_smoothed[i]) > *rc_rolling_max[i]){
-            *rc_rolling_max[i] = abs(accel_smoothed[i]);
-          }
-        }
-
-        //increment input tensor buff idx
-        RC_write_index = (RC_write_index + 1) % RC_TENSOR_SIZE;
-        RC_buf_count++;
-
-        //rc running sum, used in final average preprocessing
-        rc_running_sum_x += ax_smoothed;
-        rc_running_sum_y += ay_smoothed;
-        rc_running_sum_z += az_smoothed;
-
-        //used for cl
-        cl_model_data[X][CL_write_index] = ax_smoothed; //x accel store in classification buffer
-        cl_model_data[Y][CL_write_index] = ay_smoothed; //y accel store in classification buffer
-        cl_model_data[Z][CL_write_index] = az_smoothed; //z accel store in classification buffer
-
-        for(int i = 0; i < 3; i++){ //Compute the maximum as values are added. Used to normalize later on
-          if (abs(accel_smoothed[i]) > *cl_rolling_max[i]){
-            *cl_rolling_max[i] = abs(accel_smoothed[i]);
-          }
-        }
-        CL_write_index = (CL_write_index + 1) % CL_COLUMN_SIZE;
-        CL_buf_count++;
-
-        cl_running_sum_x += ax_smoothed;
-        cl_running_sum_y += ay_smoothed;
-        cl_running_sum_z += az_smoothed;
-      }
+      RC_write_index = (RC_write_index + 1) % RC_TENSOR_SIZE;
+      RC_buf_count++;
 
       interrupts();
+
+      if (CL_buf_count >= CL_COLUMN_SIZE){
+        cl_modelReady = true;
+      }
+      if (RC_buf_count >= RC_TENSOR_SIZE){
+        rc_modelReady = true;
+      }
+      // if (accel_write_index >= CONVOLUTION_SIZE){
+      //   convo_full = 1;
+      // }
+
+      // //if convolution is saturated
+      // if (convo_full){ //accel buff full
+      //   float accel_smoothed[] = {0, 0, 0}; //used to store x, y, and z smoothed
+
+      //   //find average / perform convolution
+      //   for (int i = 0; i < CONVOLUTION_SIZE; i++){
+      //     for (int j = 0; j < 3; j++){
+      //       accel_smoothed[j] += accel_bufs[j][i]; //row based sum
+      //     }
+      //   }
+      //   for(int axis = 0; axis < 3; axis++){
+      //     accel_smoothed[axis] /= CONVOLUTION_SIZE; //div final sum by 10
+      //   }
+
+      //   float ax_smoothed = accel_smoothed[X];
+      //   float ay_smoothed = accel_smoothed[Y];
+      //   float az_smoothed = accel_smoothed[Z];
+      //   //used for rc
+      //   a_x[RC_write_index] = ax_smoothed;
+      //   a_y[RC_write_index] = ay_smoothed;
+      //   a_z[RC_write_index] = az_smoothed;
+        
+      //   for(int i = 0; i < 3; i++){ //Compute the maximum as values are added. Used to normalize later on
+      //     if (abs(accel_smoothed[i]) > *rc_rolling_max[i]){
+      //       *rc_rolling_max[i] = abs(accel_smoothed[i]);
+      //     }
+      //   }
+
+      //   //increment input tensor buff idx
+      //   RC_write_index = (RC_write_index + 1) % RC_TENSOR_SIZE;
+      //   RC_buf_count++;
+
+      //   //rc running sum, used in final average preprocessing
+      //   rc_running_sum_x += ax_smoothed;
+      //   rc_running_sum_y += ay_smoothed;
+      //   rc_running_sum_z += az_smoothed;
+      // }
+
+      // interrupts();
     }
-    //increment
-    accel_write_index = (accel_write_index + 1) % CONVOLUTION_SIZE;
+    // //increment
+    // accel_write_index = (accel_write_index + 1) % CONVOLUTION_SIZE;
 
     //=========================================================
     #else //ifndef USE_MODEL, just store into IMUData buffer
@@ -358,17 +383,17 @@ void loop() {
   
   if (hasData) {
     //print safely
-    Serial.print(data.ax, 6);
-    Serial.print(",");
-    Serial.print(data.ay, 6);
-    Serial.print(",");
-    Serial.print(data.az, 6);
-    Serial.print(",");
-    Serial.print(data.gx, 6);
-    Serial.print(",");
-    Serial.print(data.gy, 6);
-    Serial.print(",");
-    Serial.println(data.gz, 6);
+    //Serial.print(data.ax, 6);
+    //Serial.print(",");
+    //Serial.print(data.ay, 6);
+    //Serial.print(",");
+    //Serial.print(data.az, 6);
+    //Serial.print(",");
+    //Serial.print(data.gx, 6);
+    //Serial.print(",");
+    //Serial.print(data.gy, 6);
+    //Serial.print(",");
+    ////Serial.println(data.gz, 6);
   }
   #endif
   
@@ -387,6 +412,7 @@ void loop() {
     heartRateReady = false;
     long irValue = heart_rate_sensor.getIR();
     if (checkForBeat(irValue) == true) {
+    // if (true){
       //We sensed a beat!
       long delta = millis() - lastBeat;
       lastBeat = millis();
@@ -405,38 +431,46 @@ void loop() {
       }
     }
   }
-  // Serial.println(CL_buf_count);
+  // ////Serial.println(CL_buf_count);
   //Inference======================================================
   #ifdef USE_MODEL
   //Rep Count invocation============================================
   if(rc_modelReady){
     RC_buf_count = 0;
+    RC_write_index = 0;
     rc_modelReady = false;
     TfLiteStatus status;
+    float results[3] = {0, 0, 0};
     for (int i = 0; i < 3; i++){ //3 axes
       for (int j = 0; j < RC_TENSOR_SIZE; j++){
-        rc_input->data.f[j] = (accelerometer_data[i][j] - (*rc_running_sum[i]/RC_TENSOR_SIZE)) / abs(*rc_rolling_max[i]);
-        // Serial.print("RC:");
-        // Serial.println((accelerometer_data[i][j] - (*rc_running_sum[i]/RC_TENSOR_SIZE)) / abs(*rc_rolling_max[i]));
+        rc_input->data.f[j] = (accelerometer_data[i][j]);
+        // rc_input->data.f[j] = (accelerometer_data[i][j] - (*rc_running_sum[i]/RC_TENSOR_SIZE)) / abs(*rc_rolling_max[i]);
+        // //Serial.print("RC:");
+        // ////Serial.println((accelerometer_data[i][j] - (*rc_running_sum[i]/RC_TENSOR_SIZE)) / abs(*rc_rolling_max[i]));
       }
-      *rc_running_sum[i] = 0; //reset running sum
-      *rc_rolling_max[i] = 0; //reset rolling max
+      // *rc_running_sum[i] = 0; //reset running sum
+      // *rc_rolling_max[i] = 0; //reset rolling max
       TfLiteStatus status = rep_counter_interpreter->Invoke();
       if (status != kTfLiteOk) {
-        Serial.print("Rep Count Invoke failed!: ");
-        Serial.println(i);
+        //Serial.print("Rep Count Invoke failed!: ");
+        ////Serial.println(i);
       }
-      float result = rc_output->data.f[0];
+      results[i] = rc_output->data.f[0];
 
       //Print in form "Rep Count Model Output(i): {out}"
-      Serial.print("Rep Count Model output(");
-      Serial.print(i);
-      Serial.print("): ");
-      Serial.println(result);
+      //Serial.print("Rep Count Model output(");
+      //Serial.print(i);
+      //Serial.print("): ");
+      ////Serial.println(results[i]);
     }
+    updateReps(reps, results);
   }
   //Classification Model Invocation=================================
   if (cl_modelReady){
+    //Serial.print("CL buf Count: ");
+    //Serial.println(CL_buf_count);
+    //Serial.print("CL Write Index: ");
+    //Serial.println(CL_write_index);
     //reset states for next use
     CL_buf_count = 0;
     CL_write_index = 0; 
@@ -461,9 +495,10 @@ void loop() {
       for (int i = 0; i < CL_ROW_SIZE; ++i) { //x, y, or z
         for (int j = 0; j < CL_COLUMN_SIZE/CL_BURST_LEN; ++j) {
           uint8_t idx = i * (CL_COLUMN_SIZE/CL_BURST_LEN) + j;
-          float val = (cl_model_data[i][j + k*(CL_COLUMN_SIZE/CL_BURST_LEN)] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i]); //subtract inputs by average
-          // Serial.print("CL: ")
-          // Serial.println((cl_model_data[i][j] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i])); //subtract inputs by average
+          float val = cl_model_data[i][j + k*(CL_COLUMN_SIZE/CL_BURST_LEN)];
+          // float val = (cl_model_data[i][j + k*(CL_COLUMN_SIZE/CL_BURST_LEN)] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i]); //subtract inputs by average
+          // //Serial.print("CL: ")
+          // //Serial.println((cl_model_data[i][j] - (*cl_running_sum[i] / CL_COLUMN_SIZE)) / abs(*cl_rolling_max[i])); //subtract inputs by average
           int quantized = (int)(val / scale + zero_point);
 
           //clamp
@@ -474,23 +509,56 @@ void loop() {
       }
       status = classification_interpreter->Invoke();
       if (status != kTfLiteOk) {
-        Serial.println("Classification Invoke Failed!");
+        //Serial.println("Classification Invoke Failed!");
       }
       float cl_result[3];
-      Serial.print("Classification Model Output: ");
+      //Serial.print("Classification Model Output: ");
 
       // Read output
+      uint8_t curr_max = 0;
       for (int i = 0; i < num_elements; i++) {
         cl_result[i] = (cl_output->data.uint8[i] - out_zero_point) * out_scale;
-        Serial.print(cl_result[i]);
-        Serial.print("  ");
+        if (cl_result[i] > curr_max){
+          curr_max = i;
+        }
+        //Serial.print(cl_result[i]);
+        //Serial.print("  ");
       }
-      Serial.println();
+      uint16_t bench = 0;
+      uint16_t deadlift = 0;
+      uint16_t squat = 0;
+      switch(curr_max){
+        case 0:
+          // workouts[k] = String("Bench");
+          bench++;
+          break;
+        case 1:
+          // workouts[k] = String("Deadlift");
+          deadlift++;
+          break;
+        case 2:
+          // workouts[k] = String("Squat");
+          squat++;
+          break;
+      }
+      if (bench >= deadlift && bench >= squat){
+        strcpy(workout, "Bench");
+      }
+      else if (deadlift >= bench && deadlift >= squat){
+        strcpy(workout, "Deadlift");
+      }
+      else if (squat >= bench && squat >= deadlift) {
+        strcpy(workout, "Squat");
+      }
+      else {
+        strcpy(workout, "Undefined");
+      }
+      //Serial.println();
     }
-    for (int i = 0; i < CL_ROW_SIZE; i++){
-      *cl_running_sum[i] = 0; //reset running sum for this axis
-      *cl_rolling_max[i] = 0; //reset rolling max
-    }
+    // for (int i = 0; i < CL_ROW_SIZE; i++){
+    //   *cl_running_sum[i] = 0; //reset running sum for this axis
+    //   *cl_rolling_max[i] = 0; //reset rolling max
+    // }
     //experimental:===============================
   }
   #endif
@@ -509,7 +577,7 @@ void HZ_1_callback() {
     bluetoothReady = true;
   #endif
   #ifdef USE_MODEL 
-  //check if CL buffer is full
+  //check if CL/RC buffer is full
   if (CL_buf_count >= CL_COLUMN_SIZE){
     cl_modelReady = true;
   }
@@ -523,7 +591,7 @@ void sendHeartRate() {
   // int heartRate = random(70, 120);  // Simulated heart rate
   String data = "{\"heartRate\":" + String(beatAvg) + "}";
   heartRateChar.setValue(data.c_str());
-  Serial.println("Sent heart rate: " + data);
+  //Serial.println("Sent heart rate: " + data);
 }
 
 void onCommandReceived(BLEDevice central, BLECharacteristic characteristic) {
@@ -533,8 +601,8 @@ void onCommandReceived(BLEDevice central, BLECharacteristic characteristic) {
   memcpy(cmd_buf, cmd, copy_len);
   cmd_buf[copy_len] = '\0';
 
-  Serial.print("Commande Received: ");
-  Serial.println(cmd_buf);
+  //Serial.print("Commande Received: ");
+  //Serial.println(cmd_buf);
   const char *json_cmp_to = "{\"command\":\"stop\"}";
   size_t json_len = strlen(json_cmp_to);
   if (copy_len == json_len && !memcmp(cmd_buf, json_cmp_to, copy_len)) {
@@ -543,9 +611,10 @@ void onCommandReceived(BLEDevice central, BLECharacteristic characteristic) {
 }
 
 void onBLEConnected(BLEDevice central){
-  Serial.println("BLE Device Connected... Starting IMU Collection");
+  //Serial.println("BLE Device Connected... Starting IMU Collection");
   imuTicker.attach(HZ_10_callback, float(1) / SAMPLE_RATE_HZ);
   deviceConnected = true;
+  reps = 0;
 }
 
 void onBLEDisconnected(BLEDevice central){
@@ -553,8 +622,26 @@ void onBLEDisconnected(BLEDevice central){
   deviceConnected = false;
 }
 
+//look away
+void updateReps(float &rep_count, float *outputs){
+    float a = outputs[0];
+    float b = outputs[1];
+    float c = outputs[2];
+
+    float middle;
+    if ((a <= b && b <= c) || (c <= b && b <= a))
+        middle = b;                     // b is between a and c
+    else if ((b <= a && a <= c) || (c <= a && a <= b))
+        middle = a;                     // a is between b and c
+    else
+        middle = c;                     // otherwise c is the middle one
+    rep_count += middle;                     // add the middle value to reps
+}
+
 void sendWorkoutSummary() {
-  String summary = "{\"exercise\":\"squat\",\"reps\":14}";
-  workoutChar.setValue(summary.c_str());
-  Serial.println("Sent workout summary: " + summary);
+  char json[40];
+  snprintf(json, sizeof(json), "{\"exercise\":\"%s\",\"reps\":%.2f}", workout, reps);
+  workoutChar.setValue(json);
+  //Serial.print("Sent workout summary: ");
+  //Serial.println(json);
 }
