@@ -91,9 +91,3 @@ Install the following libraries via the Arduino Library Manager:
 - **Buffer Sizes:** Tweak `CL_BURST_LEN`, `RC_BURST_LEN` in `imu_printer.ino` to adjust window lengths.  
 - **Battery & Power:** Ensure 3.3 V supply to sensors; the Nano 33 BLE’s regulator handles USB power or LiPo input.
 ---
-
-## 📄 License
-
-This project is released under the MIT License. See [LICENSE](LICENSE) for details.
-
----
