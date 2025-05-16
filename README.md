@@ -7,12 +7,12 @@ It reads 9-axis IMU and heart-rate data, classifies the exercise (bench, squat, 
 
 ## 📂 Repository Structure
 
- - serial_logger.py # UART Capture Script
- - README.md # (this file)
- - imu_printer/imu_printer.ino # Main Sketch
- - imu_printer/model.h # Header for embedded TFLite models
- - imu_printer/model.c # Embedded TFLite model data
-
+/
+├──serial_logger.py # UART Capture Script  
+├──README.md # (this file)  
+├──imu_printer/imu_printer.ino # Main Sketch  
+├──imu_printer/model.h # Header for embedded TFLite models  
+├──imu_printer/model.c # Embedded TFLite model data  
 
 ---
 
