@@ -42,9 +42,9 @@ Ticker bluetoothTicker;
 
 MAX30105 heart_rate_sensor;
 
-#define SAMPLE_RATE_HZ 30 //10 IMU Samples Per Second
+#define SAMPLE_RATE_HZ 10 //10 IMU Samples Per Second
 #define MODEL_HZ 2 // check model validity twice a second
-#define HEART_RATE_HZ 100 //30 heart rate samples per second
+#define HEART_RATE_HZ 100 //100 heart rate samples per second
 #define RC_TENSOR_SIZE 128  // Number of samples to buffer
 #define CL_BUFFER_SIZE 96 //flattened buffer size for interpreter input
 #define CL_BURST_LEN 15
@@ -237,7 +237,7 @@ void setup() {
   imuTicker.attach(HZ_10_callback, (float) 1/SAMPLE_RATE_HZ ); //100 ms = 10 times a second, immediately starts timer
   #endif
   bluetoothTicker.attach(HZ_1_callback, (float) 1/MODEL_HZ);
-  heartRateTicker.attach(HZ_30_callback, (float) 1/HEART_RATE_HZ ); //250 ms = 4 times a second, immediately starts timer
+  heartRateTicker.attach(HZ_100_callback, (float) 1/HEART_RATE_HZ ); //250 ms = 4 times a second, immediately starts timer
 }
 
 void loop() {
@@ -383,17 +383,17 @@ void loop() {
   
   if (hasData) {
     //print safely
-    //Serial.print(data.ax, 6);
-    //Serial.print(",");
-    //Serial.print(data.ay, 6);
-    //Serial.print(",");
-    //Serial.print(data.az, 6);
-    //Serial.print(",");
-    //Serial.print(data.gx, 6);
-    //Serial.print(",");
-    //Serial.print(data.gy, 6);
-    //Serial.print(",");
-    ////Serial.println(data.gz, 6);
+    Serial.print(data.ax, 6);
+    Serial.print(",");
+    Serial.print(data.ay, 6);
+    Serial.print(",");
+    Serial.print(data.az, 6);
+    Serial.print(",");
+    Serial.print(data.gx, 6);
+    Serial.print(",");
+    Serial.print(data.gy, 6);
+    Serial.print(",");
+    //Serial.println(data.gz, 6);
   }
   #endif
   
@@ -568,7 +568,7 @@ void loop() {
 void HZ_10_callback() {
   imuSampleReady = true;
 }
-void HZ_30_callback() {
+void HZ_100_callback() {
   heartRateReady = true;
 }
 void HZ_1_callback() {
